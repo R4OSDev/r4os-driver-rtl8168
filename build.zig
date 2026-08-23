@@ -10,4 +10,17 @@ pub fn build(b: *std.Build) void {
     const sdk_dep = b.dependencyFromBuildZig(sdk_build, .{});
     const sdk = sdk_build.sdk(b, sdk_dep, .{});
     _ = sdk.addR4MF(b.path("module.R4MF"));
+
+    const host_model_module = b.createModule(.{
+        .root_source_file = b.path("src/rtl8168_host_model.zig"),
+        .target = b.graph.host,
+        .optimize = .Debug,
+    });
+    host_model_module.addImport("r4os", sdk.createR4osModule(b.graph.host, .Debug));
+    const host_model_tests = b.addTest(.{ .root_module = host_model_module });
+    const run_host_model_tests = b.addRunArtifact(host_model_tests);
+
+    const test_step = b.step("test", "Run the RTL8168 deterministic hardware model");
+    test_step.dependOn(b.getInstallStep());
+    test_step.dependOn(&run_host_model_tests.step);
 }

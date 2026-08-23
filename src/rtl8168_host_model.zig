@@ -184,6 +184,7 @@ const Model = struct {
     irq_routes: [16]u8 = .{0xFF} ** 16,
     irq_route_count: usize = 0,
     msi_enable_calls: u32 = 0,
+    msi_disable_calls: u32 = 0,
 
     log_buffer: [32768]u8 = .{0} ** 32768,
     log_len: usize = 0,
@@ -669,6 +670,10 @@ fn mockAllocDmaRegion(bytes: u32, alignment: u32, out: *abi.DmaBuffer) callconv(
     return 0;
 }
 
+fn mockAllocDmaRegionConstrained(bytes: u32, alignment: u32, _: u64, out: *abi.DmaBuffer) callconv(.c) i32 {
+    return mockAllocDmaRegion(bytes, alignment, out);
+}
+
 fn mockFreeDmaRegion(buffer: *abi.DmaBuffer) callconv(.c) void {
     model.free_dma_calls += 1;
     buffer.* = .{};
@@ -762,6 +767,11 @@ fn mockPciEnableMsi(_: u8, _: u8, _: u8, _: u8) callconv(.c) i32 {
     model.msi_enable_calls += 1;
     if (!model.scenario.msi_available) return -2;
     return 28;
+}
+
+fn mockPciDisableMsi(_: u8, _: u8, _: u8, _: u8) callconv(.c) i32 {
+    model.msi_disable_calls += 1;
+    return 0;
 }
 
 fn mockIrqRegister(irq: u8, _: abi.IrqHandler, _: usize, _: u32) callconv(.c) i32 {
@@ -899,6 +909,8 @@ const mock_api = abi.DriverApi{
     .driver_completion_release = mockCompletionRelease,
     .driver_work_summary = mockWorkSummary,
     .pci_enable_msi = mockPciEnableMsi,
+    .alloc_dma_region_constrained = mockAllocDmaRegionConstrained,
+    .pci_disable_msi = mockPciDisableMsi,
 };
 
 // ---------------------------------------------------------------------------
@@ -1248,6 +1260,7 @@ test "transition shutdown parks the MAC reset-free and holds the DMA region" {
     const resets_before = model.reset_count;
     try std.testing.expectEqual(@as(i32, 0), driver.rtl8168_shutdown());
     try std.testing.expect(!busMasterOn());
+    try std.testing.expectEqual(@as(u32, 1), model.msi_disable_calls);
     // Reset-frei auch im Uebergabepfad; Engines aus, DMA-Region gehalten.
     try std.testing.expectEqual(resets_before, model.reset_count);
     try std.testing.expectEqual(@as(u32, 0), model.free_dma_calls);
@@ -1258,4 +1271,5 @@ test "transition shutdown parks the MAC reset-free and holds the DMA region" {
     // Ergebnis, ohne den Controller erneut anzufassen.
     try std.testing.expectEqual(@as(i32, 0), driver.rtl8168_shutdown());
     try std.testing.expectEqual(resets_before, model.reset_count);
+    try std.testing.expectEqual(@as(u32, 1), model.msi_disable_calls);
 }

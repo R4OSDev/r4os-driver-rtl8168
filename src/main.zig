@@ -249,6 +249,7 @@ pub export fn rtl8168_init(api: *const r4os.r4dev.DriverApi) callconv(.c) i32 {
     state = .{ .api = api };
     backend = .{};
     var ctx = context();
+    if (!ctx.apiCompatible()) return -10;
     ctx.logInfo("RTL8168.R4D init");
 
     const info = findDevice(&ctx) orelse {
@@ -345,7 +346,11 @@ pub export fn rtl8168_init(api: *const r4os.r4dev.DriverApi) callconv(.c) i32 {
     state.adapter_index = adapter;
     state.registered = true;
     state.active = true;
-    setupInterrupts(&ctx);
+    if (!setupInterrupts(&ctx)) {
+        ctx.logError("RTL8168.R4D MSI rollback failed");
+        shutdownHardware(&ctx);
+        return -8;
+    }
     ctx.logInfo("RTL8168.R4D registered");
     return 0;
 }
@@ -992,7 +997,7 @@ fn drainRx(s: *State) void {
     }
 }
 
-fn setupInterrupts(ctx: *const r4os.r4dev.DriverContext) void {
+fn setupInterrupts(ctx: *const r4os.r4dev.DriverContext) bool {
     state.irq_registered = false;
     state.irq_route_count = 0;
     state.irq_active_route = 0xFF;
@@ -1000,26 +1005,30 @@ fn setupInterrupts(ctx: *const r4os.r4dev.DriverContext) void {
         state.irq_mode = 2;
         mmioWrite16(REG_INTERRUPT_MASK, 0);
         ctx.logWarn("RTL8168.R4D polling fallback");
-        return;
+        return true;
     }
 
     // MSI zuerst (upstream nutzt fuer die aktuellen Chips ebenfalls MSI).
     // Die INTx-GSIs sind ohne ACPI-_PRT nur geraten; auf dem realen Lenovo
     // kam darueber nie ein Interrupt an. Der Pollpfad bleibt Sicherheitsnetz.
-    if (!msiDisabled(ctx) and ctx.supportsDriverApi(16, @sizeOf(r4os.abi.DriverApi))) {
+    if (!msiDisabled(ctx)) {
         const msi_irq = ctx.pciEnableMsi(state.info);
-        if (msi_irq >= 0 and msi_irq < 32) {
-            const route: u8 = @intCast(msi_irq);
-            if (ctx.irqRegister(route, irqHandler, @intFromPtr(&state), r4os.abi.irq_flag_msi) == 0) {
-                state.irq_routes[0] = route;
-                state.irq_route_count = 1;
-                state.irq_registered = true;
-                state.irq_mode = 3;
-                mmioWrite16(REG_INTERRUPT_STATUS, 0xFFFF);
-                mmioWrite16(REG_INTERRUPT_MASK, interruptEventMask());
-                ctx.logInfo("RTL8168.R4D MSI registered");
-                return;
+        if (msi_irq >= 0) {
+            state.irq_mode = 3;
+            if (msi_irq < 32) {
+                const route: u8 = @intCast(msi_irq);
+                if (ctx.irqRegister(route, irqHandler, @intFromPtr(&state), r4os.abi.irq_flag_msi) == 0) {
+                    state.irq_routes[0] = route;
+                    state.irq_route_count = 1;
+                    state.irq_registered = true;
+                    mmioWrite16(REG_INTERRUPT_STATUS, 0xFFFF);
+                    mmioWrite16(REG_INTERRUPT_MASK, interruptEventMask());
+                    ctx.logInfo("RTL8168.R4D MSI registered");
+                    return true;
+                }
             }
+            if (ctx.pciDisableMsi(state.info) != 0) return false;
+            state.irq_mode = 0;
         }
         ctx.logWarn("RTL8168.R4D MSI unavailable; trying shared INTx");
     }
@@ -1032,13 +1041,14 @@ fn setupInterrupts(ctx: *const r4os.r4dev.DriverContext) void {
         state.irq_mode = 2;
         mmioWrite16(REG_INTERRUPT_MASK, 0);
         ctx.logWarn("RTL8168.R4D INTx registration failed; polling fallback");
-        return;
+        return true;
     }
     state.irq_registered = true;
     state.irq_mode = 1;
     mmioWrite16(REG_INTERRUPT_STATUS, 0xFFFF);
     mmioWrite16(REG_INTERRUPT_MASK, interruptEventMask());
     ctx.logInfo("RTL8168.R4D shared INTx registered");
+    return true;
 }
 
 fn msiDisabled(ctx: *const r4os.r4dev.DriverContext) bool {
@@ -1338,17 +1348,20 @@ fn shutdownHardwareInternal(ctx: *const r4os.r4dev.DriverContext, transition: bo
             _ = ctx.irqUnregister(state.irq_routes[index], irqHandler, @intFromPtr(&state));
         }
     }
+    const msi_disabled = state.irq_mode != 3 or ctx.pciDisableMsi(state.info) == 0;
+    if (!msi_disabled) ctx.logWarn("RTL8168.R4D shutdown MSI disable failed");
     state.irq_registered = false;
     state.irq_route_count = 0;
+    state.irq_mode = 0;
     // A system-transition shutdown deliberately leaves the old DMA pages
     // owned until reset. Normal backend cleanup and init-failure cleanup
     // still release their region here; a regular R4D unload releases
     // transition-held DMA through commitOwnerCleanup.
-    if (state.dma.phys_addr != 0 and !transition and software_idle and bus_master_disabled) {
+    if (state.dma.phys_addr != 0 and !transition and software_idle and bus_master_disabled and msi_disabled) {
         ctx.freeDmaRegion(&state.dma);
     }
     state.registered = false;
-    return software_idle and bus_master_disabled;
+    return software_idle and bus_master_disabled and msi_disabled;
 }
 
 fn waitForSoftwareIdle(ctx: *const r4os.r4dev.DriverContext) bool {
