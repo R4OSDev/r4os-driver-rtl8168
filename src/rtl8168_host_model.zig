@@ -851,6 +851,33 @@ fn mockStorageRecoveryBegin(_: [*:0]const u8) callconv(.c) i32 {
 fn mockStorageRecoveryFinish(_: [*:0]const u8, _: i32) callconv(.c) i32 {
     return -1;
 }
+fn mockDmaPinBuffer(_: u64, _: u32, _: u32, _: *abi.DmaPinnedBuffer) callconv(.c) i32 {
+    return -1;
+}
+fn mockDmaMapPinned(_: *const abi.DmaPinnedBuffer, _: *const abi.DmaConstraints, _: u32, _: *abi.DmaMapping) callconv(.c) i32 {
+    return -1;
+}
+fn mockDmaSync(_: *const abi.DmaMapping) callconv(.c) i32 {
+    return -1;
+}
+fn mockDmaUnmap(_: *abi.DmaMapping) callconv(.c) i32 {
+    return -1;
+}
+fn mockDmaUnpin(_: *abi.DmaPinnedBuffer) callconv(.c) i32 {
+    return -1;
+}
+fn mockWorkSubmitRequest(_: *const abi.DriverWorkRequest, _: *u32) callconv(.c) i32 {
+    return -1;
+}
+fn mockActivateUsbHost(_: [*:0]const u8, _: u32) callconv(.c) i32 {
+    return -1;
+}
+fn mockRegisterDisplayBlit(_: [*:0]const u8, _: *const abi.DisplayBlitBackend) callconv(.c) i32 {
+    return -1;
+}
+fn mockNetScheduleRx(_: i32) callconv(.c) i32 {
+    return abi.net_rx_handoff_ok;
+}
 
 const mock_api = abi.DriverApi{
     .magic = abi.driver_magic,
@@ -911,6 +938,18 @@ const mock_api = abi.DriverApi{
     .pci_enable_msi = mockPciEnableMsi,
     .alloc_dma_region_constrained = mockAllocDmaRegionConstrained,
     .pci_disable_msi = mockPciDisableMsi,
+    .protocol_dispatch = null,
+    .dma_pin_buffer = mockDmaPinBuffer,
+    .dma_map_pinned = mockDmaMapPinned,
+    .dma_sync_for_device = mockDmaSync,
+    .dma_sync_for_cpu = mockDmaSync,
+    .dma_unmap = mockDmaUnmap,
+    .dma_unpin_buffer = mockDmaUnpin,
+    .driver_work_submit_request = mockWorkSubmitRequest,
+    .activate_usb_host_controller = mockActivateUsbHost,
+    .register_display_blit_backend = mockRegisterDisplayBlit,
+    .unregister_display_blit_backend = mockUnregisterStub,
+    .net_schedule_rx = mockNetScheduleRx,
 };
 
 // ---------------------------------------------------------------------------

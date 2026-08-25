@@ -19,8 +19,15 @@ pub fn build(b: *std.Build) void {
     host_model_module.addImport("r4os", sdk.createR4osModule(b.graph.host, .Debug));
     const host_model_tests = b.addTest(.{ .root_module = host_model_module });
     const run_host_model_tests = b.addRunArtifact(host_model_tests);
+    const irq_policy_tests = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("src/irq_policy.zig"),
+        .target = b.graph.host,
+        .optimize = .Debug,
+    }) });
+    const run_irq_policy_tests = b.addRunArtifact(irq_policy_tests);
 
     const test_step = b.step("test", "Run the RTL8168 deterministic hardware model");
     test_step.dependOn(b.getInstallStep());
     test_step.dependOn(&run_host_model_tests.step);
+    test_step.dependOn(&run_irq_policy_tests.step);
 }

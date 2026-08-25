@@ -2,6 +2,7 @@ const builtin = @import("builtin");
 const r4os = @import("r4os");
 const contract = @import("rtl8168_contract.zig");
 const firmware = @import("rtl8168_firmware.zig");
+const irq_policy = @import("irq_policy.zig");
 const warmfix = @import("rtl8168_warmfix.zig");
 
 // BEWUSST ENTFERNT (realer Hardwaretest, RTL8168GU XID 0x509):
@@ -69,16 +70,16 @@ const CHIP_COMMAND_RX_ENABLE: u8 = 0x08;
 const CHIP_COMMAND_TX_ENABLE: u8 = 0x04;
 const TX_POLL_NORMAL_QUEUE: u8 = 0x40;
 
-const INTERRUPT_SYSTEM_ERROR: u16 = 0x8000;
+const INTERRUPT_SYSTEM_ERROR: u16 = irq_policy.system_error;
 const INTERRUPT_PCS_TIMEOUT: u16 = 0x4000;
-const INTERRUPT_TX_DESC_UNAVAILABLE: u16 = 0x0080;
-const INTERRUPT_RX_FIFO_OVERFLOW: u16 = 0x0040;
-const INTERRUPT_LINK_CHANGE: u16 = 0x0020;
-const INTERRUPT_RX_OVERFLOW: u16 = 0x0010;
-const INTERRUPT_TX_ERROR: u16 = 0x0008;
-const INTERRUPT_TX_OK: u16 = 0x0004;
-const INTERRUPT_RX_ERROR: u16 = 0x0002;
-const INTERRUPT_RX_OK: u16 = 0x0001;
+const INTERRUPT_TX_DESC_UNAVAILABLE: u16 = irq_policy.tx_desc_unavailable;
+const INTERRUPT_RX_FIFO_OVERFLOW: u16 = irq_policy.rx_fifo_overflow;
+const INTERRUPT_LINK_CHANGE: u16 = irq_policy.link_change;
+const INTERRUPT_RX_OVERFLOW: u16 = irq_policy.rx_overflow;
+const INTERRUPT_TX_ERROR: u16 = irq_policy.tx_error;
+const INTERRUPT_TX_OK: u16 = irq_policy.tx_ok;
+const INTERRUPT_RX_ERROR: u16 = irq_policy.rx_error;
+const INTERRUPT_RX_OK: u16 = irq_policy.rx_ok;
 const INTERRUPT_ACTIVE: u16 = INTERRUPT_SYSTEM_ERROR |
     INTERRUPT_PCS_TIMEOUT |
     INTERRUPT_TX_DESC_UNAVAILABLE |
@@ -204,6 +205,10 @@ const State = struct {
     tx_errors: u64 = 0,
     rx_overflows: u64 = 0,
     rx_drops: u64 = 0,
+    rx_handoff_busy: u64 = 0,
+    rx_budget_ends: u64 = 0,
+    irq_rx_wakeups: u64 = 0,
+    irq_non_rx: u64 = 0,
     poll_count: u64 = 0,
     poll_fallbacks: u64 = 0,
     irq_registered: bool = false,
@@ -789,7 +794,10 @@ fn poll(raw_context: ?*anyopaque) callconv(.c) void {
         !@atomicLoad(bool, &s.recovery_pending, .acquire) and
         !@atomicLoad(bool, &s.recovery_active, .acquire))
     {
-        drainRx(s);
+        if (drainRx(s)) {
+            const ctx = context();
+            _ = ctx.netScheduleRx(s.adapter_index);
+        }
         if (!s.tx_confirmed) canaryTick(s);
     }
 }
@@ -961,7 +969,7 @@ fn appendCounter(buf: *[96]u8, start: usize, label: []const u8, value: u64) usiz
     return len;
 }
 
-fn drainRx(s: *State) void {
+fn drainRx(s: *State) bool {
     var drained: usize = 0;
     while (drained < RX_DRAIN_BUDGET) : (drained += 1) {
         if (@atomicLoad(bool, &s.recovery_pending, .acquire) or @atomicLoad(bool, &s.recovery_active, .acquire)) break;
@@ -974,7 +982,12 @@ fn drainRx(s: *State) void {
 
         if (contract.rxFrameLength(opts1, DMA_BUFFER_BYTES)) |frame_len| {
             const frame = rxBuffer(slot);
-            if (context().netReceiveFrame(s.adapter_index, frame[0..frame_len]) == 0) {
+            const handoff_result = context().netReceiveFrame(s.adapter_index, frame[0..frame_len]);
+            if (handoff_result == r4os.abi.net_rx_handoff_busy) {
+                s.rx_handoff_busy +%= 1;
+                return true;
+            }
+            if (handoff_result == r4os.abi.net_rx_handoff_ok) {
                 s.rx_ok +%= 1;
                 if (!s.rx_confirmed) {
                     s.rx_confirmed = true;
@@ -995,6 +1008,10 @@ fn drainRx(s: *State) void {
         descriptor.opts1 = contract.rxOwnedOptions(DMA_BUFFER_BYTES, slot + 1 == RX_DESCRIPTOR_COUNT);
         s.rx_head = (slot + 1) % RX_DESCRIPTOR_COUNT;
     }
+    if (@atomicLoad(bool, &s.recovery_pending, .acquire) or @atomicLoad(bool, &s.recovery_active, .acquire)) return true;
+    const more_work = (rxDescriptor(s.rx_head).opts1 & contract.descriptor_owned) == 0;
+    if (more_work and drained >= RX_DRAIN_BUDGET) s.rx_budget_ends +%= 1;
+    return more_work;
 }
 
 fn setupInterrupts(ctx: *const r4os.r4dev.DriverContext) bool {
@@ -1234,7 +1251,14 @@ fn irqHandler(irq: u8, raw_context: usize) callconv(.c) u32 {
     s.irq_count +%= 1;
     s.irq_active_route = irq;
     recordAndAckInterrupt(s, isr, true);
-    s.poll_hint = true;
+    if (irq_policy.needsRxTask(isr)) {
+        s.poll_hint = true;
+        s.irq_rx_wakeups +%= 1;
+        const ctx = context();
+        _ = ctx.netScheduleRx(s.adapter_index);
+    } else {
+        s.irq_non_rx +%= 1;
+    }
     s.irq_handled +%= 1;
     return r4os.abi.irq_result_handled;
 }

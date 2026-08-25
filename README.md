@@ -4,13 +4,18 @@
 
 ## Package
 
-- Version: `0.1.1`
+- Version: `0.1.3`
 - Image target: `/R4OS/DRIVERS/RTL8168.R4D`
 - Image scope: `slim`
 - Canonical project manifest: `module.R4MF`
 
 The manifest is the single source of truth for the artifact, imports, image
 target, and package metadata.
+
+RX interrupts acknowledge and classify causes only. DriverApi v23 wakes the
+common `net-rx` task for RX or controller-recovery work; TX and link-only
+causes do not enter the protocol path. The task retains a CPU-owned descriptor
+when Netcore's bounded copying queue reports backpressure.
 
 ## Build
 
