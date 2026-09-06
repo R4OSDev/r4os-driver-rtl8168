@@ -18,13 +18,18 @@ Build unter Linux:
 
     ./Build.sh test
 
-Artefakt: zig-out/RTL8168.R4D
+Artefakt: Artifacts/Modules/RTL8168/RTL8168.R4D (Workspace; ARTIFACTS_ROOT aus Settings.R4S)
 Image-Ziel: C:\R4OS\DRIVERS\RTL8168.R4D
 
-Bekannte Grenze: Die aktuelle DriverAPI adressiert nur die PCI-Funktion des
-Controllers. ASPM-L1 kann deshalb am Endpunkt, aber noch nicht am zugehoerigen
-Upstream-Port abgeschaltet werden. Fuer XID-spezifische EPHY-Sequenzen und
-Firmware-Blobs gibt es in R4OS noch keinen Firmware-Ladepfad.
+Die DriverAPI kann auch andere enumerierte PCI-Funktionen adressieren. Beim
+Binden prueft der Treiber den naechsten uebergeordneten Bridge-Port und
+aktiviert dort bei Bedarf Memory Space und Bus Master. Die ASPM-Anpassung
+bleibt auf den Endpunkt begrenzt. Fuer RTL8168GU (XID 0x509) existieren
+eingebundene MAC-MCU-/PHY-RAM-Tabellen und ein begrenzter Lader. Die Optionen
+fw=on beziehungsweise fw=force aktivieren ihn; Standard ist fw=off.
+warmfix=on erlaubt zusaetzlich nach wiederholtem TX-Stall die GU-spezifische
+Uebernahme mit Firmware und Startkette. Unbekannte XIDs erhalten diese
+Vertiefung nicht. Hostmodelle ersetzen keine Hardwareabnahme weiterer XIDs.
 
 Seit 0.69.17 wird eine aktivierte MSI-Konfiguration sofort zurueckgerollt,
 wenn die Router-Registrierung scheitert. Beim Shutdown werden MAC und
