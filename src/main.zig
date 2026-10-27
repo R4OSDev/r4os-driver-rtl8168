@@ -315,7 +315,7 @@ pub export fn rtl8168_init(api: *const r4os.r4dev.DriverApi) callconv(.c) i32 {
     requestBasicAutoneg(&ctx);
     if (!initializeHardware(&ctx, false)) {
         ctx.logError("RTL8168.R4D hardware initialization failed");
-        shutdownHardware(&ctx);
+        _ = shutdownHardware(&ctx);
         return -6;
     }
 
@@ -345,7 +345,7 @@ pub export fn rtl8168_init(api: *const r4os.r4dev.DriverApi) callconv(.c) i32 {
     const adapter = ctx.registerNetBackend("rtl8168", &backend);
     if (adapter < 0) {
         ctx.logError("RTL8168.R4D register_net_backend failed");
-        shutdownHardware(&ctx);
+        _ = shutdownHardware(&ctx);
         return -7;
     }
     state.adapter_index = adapter;
@@ -353,7 +353,7 @@ pub export fn rtl8168_init(api: *const r4os.r4dev.DriverApi) callconv(.c) i32 {
     state.active = true;
     if (!setupInterrupts(&ctx)) {
         ctx.logError("RTL8168.R4D MSI rollback failed");
-        shutdownHardware(&ctx);
+        _ = shutdownHardware(&ctx);
         return -8;
     }
     ctx.logInfo("RTL8168.R4D registered");
@@ -1296,8 +1296,7 @@ fn backendShutdown(raw_context: ?*anyopaque) callconv(.c) i32 {
     // the transition shutdown has already established its handoff state.
     if (!state.registered) return 0;
     var ctx = context();
-    shutdownHardware(&ctx);
-    return 0;
+    return if (shutdownHardware(&ctx)) 0 else -1;
 }
 
 fn status(raw_context: ?*anyopaque, out: *r4os.abi.NetBackendStatus) callconv(.c) i32 {
@@ -1326,8 +1325,8 @@ fn status(raw_context: ?*anyopaque, out: *r4os.abi.NetBackendStatus) callconv(.c
     return 0;
 }
 
-fn shutdownHardware(ctx: *const r4os.r4dev.DriverContext) void {
-    _ = shutdownHardwareInternal(ctx, false);
+fn shutdownHardware(ctx: *const r4os.r4dev.DriverContext) bool {
+    return shutdownHardwareInternal(ctx, false);
 }
 
 fn shutdownHardwareForTransition(ctx: *const r4os.r4dev.DriverContext) bool {
@@ -1366,26 +1365,34 @@ fn shutdownHardwareInternal(ctx: *const r4os.r4dev.DriverContext, transition: bo
         mmioWrite16(REG_INTERRUPT_MASK, 0);
         mmioWrite16(REG_INTERRUPT_STATUS, 0xFFFF);
     }
+    var remaining_irqs: usize = 0;
     if (state.irq_registered) {
         var index: usize = 0;
         while (index < state.irq_route_count) : (index += 1) {
-            _ = ctx.irqUnregister(state.irq_routes[index], irqHandler, @intFromPtr(&state));
+            const route = state.irq_routes[index];
+            if (ctx.irqUnregister(route, irqHandler, @intFromPtr(&state)) != 0) {
+                state.irq_routes[remaining_irqs] = route;
+                remaining_irqs += 1;
+            }
         }
     }
-    const msi_disabled = state.irq_mode != 3 or ctx.pciDisableMsi(state.info) == 0;
+    @memset(state.irq_routes[remaining_irqs..], 0xFF);
+    state.irq_route_count = remaining_irqs;
+    state.irq_registered = remaining_irqs != 0;
+    const irq_safe = remaining_irqs == 0;
+    const msi_disabled = irq_safe and (state.irq_mode != 3 or ctx.pciDisableMsi(state.info) == 0);
     if (!msi_disabled) ctx.logWarn("RTL8168.R4D shutdown MSI disable failed");
-    state.irq_registered = false;
-    state.irq_route_count = 0;
-    state.irq_mode = 0;
+    if (msi_disabled) state.irq_mode = 0;
     // A system-transition shutdown deliberately leaves the old DMA pages
     // owned until reset. Normal backend cleanup and init-failure cleanup
     // still release their region here; a regular R4D unload releases
     // transition-held DMA through commitOwnerCleanup.
-    if (state.dma.phys_addr != 0 and !transition and software_idle and bus_master_disabled and msi_disabled) {
+    if (state.dma.phys_addr != 0 and !transition and software_idle and bus_master_disabled and irq_safe and msi_disabled) {
         ctx.freeDmaRegion(&state.dma);
     }
-    state.registered = false;
-    return software_idle and bus_master_disabled and msi_disabled;
+    const safe = software_idle and bus_master_disabled and irq_safe and msi_disabled;
+    if (safe) state.registered = false;
+    return safe;
 }
 
 fn waitForSoftwareIdle(ctx: *const r4os.r4dev.DriverContext) bool {

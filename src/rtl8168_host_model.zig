@@ -185,6 +185,8 @@ const Model = struct {
     irq_route_count: usize = 0,
     msi_enable_calls: u32 = 0,
     msi_disable_calls: u32 = 0,
+    irq_unregister_busy: bool = false,
+    irq_unregister_calls: u32 = 0,
 
     log_buffer: [32768]u8 = .{0} ** 32768,
     log_len: usize = 0,
@@ -783,7 +785,8 @@ fn mockIrqRegister(irq: u8, _: abi.IrqHandler, _: usize, _: u32) callconv(.c) i3
 }
 
 fn mockIrqUnregister(_: u8, _: abi.IrqHandler, _: usize) callconv(.c) i32 {
-    return 0;
+    model.irq_unregister_calls += 1;
+    return if (model.irq_unregister_busy) -3 else 0;
 }
 
 fn mockIrqStats(_: u8, out: *abi.IrqStats) callconv(.c) i32 {
@@ -807,6 +810,18 @@ fn mockNetReceiveFrame(_: i32, _: [*]const u8, len: u32) callconv(.c) i32 {
     model.received_frames += 1;
     model.received_last_len = len;
     return 0;
+}
+
+fn mockNetBackendQuery(_: i32, out: *abi.NetBackendNegotiation) callconv(.c) i32 {
+    out.* = .{};
+    return 0;
+}
+
+fn mockNetReceivePacket(index: i32, packet: *const abi.NetPacket) callconv(.c) i32 {
+    if (packet.version != abi.net_packet_version or packet.size < @sizeOf(abi.NetPacket) or
+        packet.ownership != abi.net_buffer_ownership_borrowed_until_return or
+        packet.fallback_addr == 0 or packet.fallback_bytes == 0 or packet.segment_count != 0) return -1;
+    return mockNetReceiveFrame(index, @ptrFromInt(packet.fallback_addr), packet.fallback_bytes);
 }
 
 fn mockTickCount() callconv(.c) u64 {
@@ -950,6 +965,8 @@ const mock_api = abi.DriverApi{
     .register_display_blit_backend = mockRegisterDisplayBlit,
     .unregister_display_blit_backend = mockUnregisterStub,
     .net_schedule_rx = mockNetScheduleRx,
+    .net_backend_query = mockNetBackendQuery,
+    .net_receive_packet = mockNetReceivePacket,
 };
 
 // ---------------------------------------------------------------------------
@@ -1311,4 +1328,19 @@ test "transition shutdown parks the MAC reset-free and holds the DMA region" {
     try std.testing.expectEqual(@as(i32, 0), driver.rtl8168_shutdown());
     try std.testing.expectEqual(resets_before, model.reset_count);
     try std.testing.expectEqual(@as(u32, 1), model.msi_disable_calls);
+}
+
+test "busy IRQ retirement vetoes backend teardown and retains route MSI and DMA until retry" {
+    try std.testing.expectEqual(@as(i32, 0), bindDriver(.{}));
+    const backend = model.backend.?;
+    model.irq_unregister_busy = true;
+    try std.testing.expectEqual(@as(i32, -1), backend.shutdown.?(backend.context));
+    try std.testing.expectEqual(@as(u32, 1), model.irq_unregister_calls);
+    try std.testing.expectEqual(@as(u32, 0), model.msi_disable_calls);
+    try std.testing.expectEqual(@as(u32, 0), model.free_dma_calls);
+    model.irq_unregister_busy = false;
+    try std.testing.expectEqual(@as(i32, 0), backend.shutdown.?(backend.context));
+    try std.testing.expectEqual(@as(u32, 2), model.irq_unregister_calls);
+    try std.testing.expectEqual(@as(u32, 1), model.msi_disable_calls);
+    try std.testing.expectEqual(@as(u32, 1), model.free_dma_calls);
 }
