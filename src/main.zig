@@ -25,7 +25,7 @@ comptime {
     // Der R4D-Entry-Stub existiert nur im echten Modulbuild. Ein
     // Host-Testbuild (rtl8168_host_model.zig) linkt keinen R4D-Einstieg.
     if (!builtin.is_test) {
-        asm (r4os.r4dev.driverEntriesAsm("rtl8168_init", "rtl8168_shutdown"));
+        asm (r4os.technical2.driverEntriesAsm("rtl8168_init", "rtl8168_shutdown"));
     }
 }
 
@@ -168,7 +168,7 @@ const SHUTDOWN_SOFTWARE_IDLE_MILLISECONDS: u32 = 100;
 const CONTROLLER_RESET_MILLISECONDS: u32 = 100;
 
 const State = struct {
-    api: *const r4os.r4dev.DriverApi = undefined,
+    api: *const r4os.r4dev.DriverApi2 = undefined,
     active: bool = false,
     registered: bool = false,
     transition_shutdown_done: bool = false,
@@ -250,11 +250,11 @@ const State = struct {
 var state: State = .{};
 var backend: r4os.abi.NetBackend = .{};
 
-pub export fn rtl8168_init(api: *const r4os.r4dev.DriverApi) callconv(.c) i32 {
+pub export fn rtl8168_init(api: *const r4os.r4dev.DriverApi2) callconv(.c) i32 {
     state = .{ .api = api };
     backend = .{};
     var ctx = context();
-    if (!ctx.apiCompatible()) return -10;
+    if (!ctx.requires(.{ "get_option", "alloc_dma_region", "free_dma_region", "irq_register", "irq_unregister", "net_schedule_rx", "pci_device_at", "pci_device_count", "pci_disable_msi", "pci_enable_bus_master", "pci_enable_msi", "pci_map_bar", "pci_read_bar", "pci_read_config32", "pci_write_config32", "register_net_backend", "tick_count", "timer_frequency", "wait_ticks" })) return -10;
     ctx.logInfo("RTL8168.R4D init");
 
     const info = findDevice(&ctx) orelse {
@@ -370,11 +370,11 @@ pub export fn rtl8168_shutdown() callconv(.c) i32 {
     return if (safe) 0 else -1;
 }
 
-fn context() r4os.r4dev.DriverContext {
-    return r4os.r4dev.DriverContext.init(state.api);
+fn context() r4os.r4dev.DriverContext2 {
+    return r4os.r4dev.DriverContext2.init(state.api);
 }
 
-fn findDevice(ctx: *const r4os.r4dev.DriverContext) ?r4os.abi.PciDeviceInfo {
+fn findDevice(ctx: *const r4os.r4dev.DriverContext2) ?r4os.abi.PciDeviceInfo {
     var index: u32 = 0;
     const count = ctx.pciDeviceCount();
     while (index < count) : (index += 1) {
@@ -385,7 +385,7 @@ fn findDevice(ctx: *const r4os.r4dev.DriverContext) ?r4os.abi.PciDeviceInfo {
     return null;
 }
 
-fn mapRegisterBar(ctx: *const r4os.r4dev.DriverContext, info: r4os.abi.PciDeviceInfo) bool {
+fn mapRegisterBar(ctx: *const r4os.r4dev.DriverContext2, info: r4os.abi.PciDeviceInfo) bool {
     // Real RTL8168 systems normally expose the register window in BAR2.
     // Firmware variants are allowed to place it in another memory BAR, so
     // retain BAR2 priority and then try every other real BAR (never the high
@@ -402,7 +402,7 @@ fn mapRegisterBar(ctx: *const r4os.r4dev.DriverContext, info: r4os.abi.PciDevice
     return false;
 }
 
-fn isMemoryBarStart(ctx: *const r4os.r4dev.DriverContext, info: r4os.abi.PciDeviceInfo, target: u8) bool {
+fn isMemoryBarStart(ctx: *const r4os.r4dev.DriverContext2, info: r4os.abi.PciDeviceInfo, target: u8) bool {
     var index: u8 = 0;
     while (index < 6) {
         const raw = ctx.pciReadBar(info, index);
@@ -418,7 +418,7 @@ fn isMemoryBarStart(ctx: *const r4os.r4dev.DriverContext, info: r4os.abi.PciDevi
     return false;
 }
 
-fn readPciIdentity(ctx: *const r4os.r4dev.DriverContext) void {
+fn readPciIdentity(ctx: *const r4os.r4dev.DriverContext2) void {
     const class_revision = ctx.pciReadConfig32(state.info, 0x08);
     const subsystem = ctx.pciReadConfig32(state.info, 0x2C);
     state.revision = @truncate(class_revision);
@@ -434,7 +434,7 @@ fn readPciIdentity(ctx: *const r4os.r4dev.DriverContext) void {
     }
 }
 
-fn walkPciCapabilities(ctx: *const r4os.r4dev.DriverContext) void {
+fn walkPciCapabilities(ctx: *const r4os.r4dev.DriverContext2) void {
     const command_status = ctx.pciReadConfig32(state.info, 0x04);
     if ((command_status & (@as(u32, 1) << 20)) == 0) return;
     var offset = contract.capabilityOffset(ctx.pciReadConfig32(state.info, 0x34));
@@ -493,7 +493,7 @@ fn walkPciCapabilities(ctx: *const r4os.r4dev.DriverContext) void {
     }
 }
 
-fn logXidIdentity(ctx: *const r4os.r4dev.DriverContext) void {
+fn logXidIdentity(ctx: *const r4os.r4dev.DriverContext2) void {
     // Die XID-Zeile beweist im realen Bootlog, welche Chip-Identitaet der
     // Treiber gebunden hat; genau diese Spur fehlte bei der langen
     // 0x509-vs-8168H-Fehlsuche.
@@ -524,7 +524,7 @@ fn logXidIdentity(ctx: *const r4os.r4dev.DriverContext) void {
     ctx.logInfo(buf[0..len :0].ptr);
 }
 
-fn logFeatureConfiguration(ctx: *const r4os.r4dev.DriverContext) void {
+fn logFeatureConfiguration(ctx: *const r4os.r4dev.DriverContext2) void {
     // Die Schalterstellung dokumentiert sich selbst im Bootlog.
     var buf: [96]u8 = .{0} ** 96;
     var len: usize = 0;
@@ -566,7 +566,7 @@ fn logFeatureConfiguration(ctx: *const r4os.r4dev.DriverContext) void {
     ctx.logInfo(buf[0..len :0].ptr);
 }
 
-fn requestBasicAutoneg(ctx: *const r4os.r4dev.DriverContext) void {
+fn requestBasicAutoneg(ctx: *const r4os.r4dev.DriverContext2) void {
     if (linkUp()) return;
     const current = phyRead(MII_BMCR) orelse {
         if (state.phy_family == .preserve_firmware) {
@@ -643,7 +643,7 @@ fn gphyOcpWrite(reg: u5, value: u16) bool {
     return false;
 }
 
-fn initializeHardware(ctx: *const r4os.r4dev.DriverContext, after_hard_reset: bool) bool {
+fn initializeHardware(ctx: *const r4os.r4dev.DriverContext2, after_hard_reset: bool) bool {
     if (state.mmio.virt_addr == 0 or state.dma.virt_addr == 0) return false;
     mmioWrite16(REG_INTERRUPT_MASK, 0);
     mmioWrite16(REG_INTERRUPT_STATUS, 0xFFFF);
@@ -802,7 +802,7 @@ fn poll(raw_context: ?*anyopaque) callconv(.c) void {
     }
 }
 
-fn logRxConfirmed(ctx: *const r4os.r4dev.DriverContext) void {
+fn logRxConfirmed(ctx: *const r4os.r4dev.DriverContext2) void {
     var buf: [96]u8 = .{0} ** 96;
     var len: usize = 0;
     for ("RTL8168.R4D rx path confirmed") |c| {
@@ -831,7 +831,7 @@ fn canaryTick(s: *State) void {
     if (transmit(@ptrCast(s), &frame, frame.len) == 0) s.canary_frames +%= 1;
 }
 
-fn logTxConfirmed(ctx: *const r4os.r4dev.DriverContext) void {
+fn logTxConfirmed(ctx: *const r4os.r4dev.DriverContext2) void {
     var buf: [96]u8 = .{0} ** 96;
     var len: usize = 0;
     for ("RTL8168.R4D tx canary confirmed") |c| {
@@ -926,7 +926,7 @@ fn recoverTxStall(s: *State) bool {
     return true;
 }
 
-fn logRecoveryTelemetry(ctx: *const r4os.r4dev.DriverContext, cause_syserr: bool) void {
+fn logRecoveryTelemetry(ctx: *const r4os.r4dev.DriverContext2, cause_syserr: bool) void {
     // Recovery ist Ausnahmeverhalten; jede Ausfuehrung wird mit Ursache und
     // Gesamtzaehlern sichtbar (COM1/Bootlog/LOGSVC).
     var buf: [96]u8 = .{0} ** 96;
@@ -1014,7 +1014,7 @@ fn drainRx(s: *State) bool {
     return more_work;
 }
 
-fn setupInterrupts(ctx: *const r4os.r4dev.DriverContext) bool {
+fn setupInterrupts(ctx: *const r4os.r4dev.DriverContext2) bool {
     state.irq_registered = false;
     state.irq_route_count = 0;
     state.irq_active_route = 0xFF;
@@ -1068,11 +1068,11 @@ fn setupInterrupts(ctx: *const r4os.r4dev.DriverContext) bool {
     return true;
 }
 
-fn msiDisabled(ctx: *const r4os.r4dev.DriverContext) bool {
+fn msiDisabled(ctx: *const r4os.r4dev.DriverContext2) bool {
     return optionDisabled(ctx, "msi");
 }
 
-fn fwMode(ctx: *const r4os.r4dev.DriverContext) firmware.Mode {
+fn fwMode(ctx: *const r4os.r4dev.DriverContext2) firmware.Mode {
     const value = ctx.getOption("RTL8168", "fw");
     if (zEqIgnoreCase(value, "force")) return .force;
     if (zEqIgnoreCase(value, "on") or zEqIgnoreCase(value, "enabled") or zEqIgnoreCase(value, "1")) return .on;
@@ -1082,7 +1082,7 @@ fn fwMode(ctx: *const r4os.r4dev.DriverContext) firmware.Mode {
 // Der Bridge-Check am Bind ist Standardverhalten; die Option steuert nur
 // noch die stall-getriggerte Referenz-Eskalation (Takeover+Firmware+
 // Startkette) als Sicherheitsnetz fuer unbekannte Warmzustaende.
-fn warmfixEnabled(ctx: *const r4os.r4dev.DriverContext) bool {
+fn warmfixEnabled(ctx: *const r4os.r4dev.DriverContext2) bool {
     const value = ctx.getOption("RTL8168", "warmfix");
     return zEqIgnoreCase(value, "on") or zEqIgnoreCase(value, "enabled") or zEqIgnoreCase(value, "1");
 }
@@ -1095,7 +1095,7 @@ fn warmfixEnabled(ctx: *const r4os.r4dev.DriverContext) bool {
 
 // Findet den naechstgelegenen Parent-Root-Port ueber der NIC (Bridge, deren
 // Secondary..Subordinate den NIC-Bus umfasst).
-fn warmfixFindBridge(ctx: *const r4os.r4dev.DriverContext) ?r4os.abi.PciDeviceInfo {
+fn warmfixFindBridge(ctx: *const r4os.r4dev.DriverContext2) ?r4os.abi.PciDeviceInfo {
     var bridge: ?r4os.abi.PciDeviceInfo = null;
     var bridge_secondary: u8 = 0;
     const count = ctx.pciDeviceCount();
@@ -1124,7 +1124,7 @@ fn warmfixFindBridge(ctx: *const r4os.r4dev.DriverContext) ?r4os.abi.PciDeviceIn
 // Memory-Space oder Bus-Master, werden beide gesetzt und verifiziert -
 // auf gesunden Kaltboots ein reiner No-Op. Laeuft AUSSCHLIESSLICH im
 // Init-Kontext, bevor Ringe oder Engines existieren.
-fn warmfixBridgeAtBind(ctx: *const r4os.r4dev.DriverContext) void {
+fn warmfixBridgeAtBind(ctx: *const r4os.r4dev.DriverContext2) void {
     const endpoint_command = ctx.pciReadConfig32(state.info, PCI_COMMAND_OFFSET);
     const bridge = warmfixFindBridge(ctx);
 
@@ -1222,12 +1222,12 @@ const fw_access = firmware.Access{
     .logWarn = fwLogWarn,
 };
 
-fn optionDisabled(ctx: *const r4os.r4dev.DriverContext, key: [*:0]const u8) bool {
+fn optionDisabled(ctx: *const r4os.r4dev.DriverContext2, key: [*:0]const u8) bool {
     const value = ctx.getOption("RTL8168", key);
     return zEqIgnoreCase(value, "off") or zEqIgnoreCase(value, "disabled") or zEqIgnoreCase(value, "0");
 }
 
-fn registerIrqRoute(ctx: *const r4os.r4dev.DriverContext, route: u8) bool {
+fn registerIrqRoute(ctx: *const r4os.r4dev.DriverContext2, route: u8) bool {
     if (route >= 32 or state.irq_route_count >= state.irq_routes.len) return false;
     var index: usize = 0;
     while (index < state.irq_route_count) : (index += 1) {
@@ -1284,7 +1284,7 @@ fn recordAndAckInterrupt(s: *State, raw_isr: u16, from_irq: bool) void {
     mmioWrite16(REG_INTERRUPT_STATUS, raw_isr);
 }
 
-fn irqDisabled(ctx: *const r4os.r4dev.DriverContext) bool {
+fn irqDisabled(ctx: *const r4os.r4dev.DriverContext2) bool {
     const value = ctx.getOption("RTL8168", "irq");
     return zEqIgnoreCase(value, "off") or zEqIgnoreCase(value, "disabled") or zEqIgnoreCase(value, "0");
 }
@@ -1325,15 +1325,15 @@ fn status(raw_context: ?*anyopaque, out: *r4os.abi.NetBackendStatus) callconv(.c
     return 0;
 }
 
-fn shutdownHardware(ctx: *const r4os.r4dev.DriverContext) bool {
+fn shutdownHardware(ctx: *const r4os.r4dev.DriverContext2) bool {
     return shutdownHardwareInternal(ctx, false);
 }
 
-fn shutdownHardwareForTransition(ctx: *const r4os.r4dev.DriverContext) bool {
+fn shutdownHardwareForTransition(ctx: *const r4os.r4dev.DriverContext2) bool {
     return shutdownHardwareInternal(ctx, true);
 }
 
-fn shutdownHardwareInternal(ctx: *const r4os.r4dev.DriverContext, transition: bool) bool {
+fn shutdownHardwareInternal(ctx: *const r4os.r4dev.DriverContext2, transition: bool) bool {
     state.active = false;
     // No new poll or transmit can enter after active=false. Wait for work that
     // passed the old active check before touching its descriptor memory.
@@ -1395,20 +1395,26 @@ fn shutdownHardwareInternal(ctx: *const r4os.r4dev.DriverContext, transition: bo
     return safe;
 }
 
-fn waitForSoftwareIdle(ctx: *const r4os.r4dev.DriverContext) bool {
+fn waitForSoftwareIdle(ctx: *const r4os.r4dev.DriverContext2) bool {
     const timeout = contract.ticksForMilliseconds(ctx.timerFrequency(), SHUTDOWN_SOFTWARE_IDLE_MILLISECONDS);
     const start = ctx.tickCount();
+    var budget = r4os.driver_poll_budget.DriverPollBudget.initIterations(@as(u64, timeout) +| 8, .task);
     while (@atomicLoad(bool, &state.poll_active, .acquire) or
         @atomicLoad(bool, &state.tx_lock, .acquire) or
         @atomicLoad(bool, &state.recovery_active, .acquire))
     {
-        if (ctx.tickCount() -% start >= timeout) return false;
+        if (ctx.tickCount() -% start >= timeout or budget.step(null, false) != .proceed) return false;
         ctx.waitTicks(1);
     }
     return true;
 }
 
-fn disablePciBusMaster(ctx: *const r4os.r4dev.DriverContext) bool {
+pub fn testingHoldPoll(active: bool) void {
+    if (!builtin.is_test) @compileError("Only the exact owner host model may hold this poll callback");
+    @atomicStore(bool, &state.poll_active, active, .release);
+}
+
+fn disablePciBusMaster(ctx: *const r4os.r4dev.DriverContext2) bool {
     const raw = ctx.pciReadConfig32(state.info, PCI_COMMAND_OFFSET);
     if (raw == 0xFFFF_FFFF) return false;
     if ((raw & PCI_COMMAND_BUS_MASTER) == 0) return true;
@@ -1430,15 +1436,16 @@ fn restoreMacAddress() void {
     _ = mmioRead8(REG_CHIP_COMMAND);
 }
 
-fn resetControllerBounded(ctx: *const r4os.r4dev.DriverContext) bool {
+fn resetControllerBounded(ctx: *const r4os.r4dev.DriverContext2) bool {
     // Einziger CmdReset-Aufrufer: die Stall-/SYSErr-Recovery zur Laufzeit.
     // Der Bind und der Shutdown bleiben reset-frei.
     memoryFence();
     mmioWrite8(REG_CHIP_COMMAND, CHIP_COMMAND_RESET);
     const timeout = contract.ticksForMilliseconds(ctx.timerFrequency(), CONTROLLER_RESET_MILLISECONDS);
     const start = ctx.tickCount();
+    var budget = r4os.driver_poll_budget.DriverPollBudget.initIterations(@as(u64, timeout) +| 8, .task);
     while ((mmioRead8(REG_CHIP_COMMAND) & CHIP_COMMAND_RESET) != 0) {
-        if (ctx.tickCount() -% start >= timeout) return false;
+        if (ctx.tickCount() -% start >= timeout or budget.step(null, false) != .proceed) return false;
         ctx.waitTicks(1);
     }
     waitMilliseconds(ctx, 1);
@@ -1446,7 +1453,7 @@ fn resetControllerBounded(ctx: *const r4os.r4dev.DriverContext) bool {
     return true;
 }
 
-fn waitMilliseconds(ctx: *const r4os.r4dev.DriverContext, milliseconds: u32) void {
+fn waitMilliseconds(ctx: *const r4os.r4dev.DriverContext2, milliseconds: u32) void {
     const ticks = contract.ticksForMilliseconds(ctx.timerFrequency(), milliseconds);
     if (ticks != 0) ctx.waitTicks(ticks);
 }

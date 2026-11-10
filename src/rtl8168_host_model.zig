@@ -645,6 +645,9 @@ fn mockGetOption(_: [*:0]const u8, key: [*:0]const u8) callconv(.c) [*:0]const u
 fn mockRegisterStub(_: [*:0]const u8, _: *const anyopaque) callconv(.c) i32 {
     return -1;
 }
+fn mockRegisterAudio2(_: [*:0]const u8, _: *const r4os.technical2.abi.AudioBackend2) callconv(.c) i32 {
+    return -1;
+}
 fn mockUnregisterStub(_: [*:0]const u8) callconv(.c) i32 {
     return -1;
 }
@@ -832,8 +835,10 @@ fn mockTimerFrequency() callconv(.c) u32 {
     return 1000;
 }
 
+var freeze_clock = false;
+var frozen_waits: u64 = 0;
 fn mockWaitTicks(ticks: u64) callconv(.c) void {
-    model.sim_ticks +%= @max(ticks, 1);
+    if (freeze_clock) frozen_waits += 1 else model.sim_ticks +%= @max(ticks, 1);
 }
 
 fn mockWorkSubmit(_: abi.DriverWorkHandler, _: usize, _: u32, _: *u32) callconv(.c) i32 {
@@ -894,10 +899,10 @@ fn mockNetScheduleRx(_: i32) callconv(.c) i32 {
     return abi.net_rx_handoff_ok;
 }
 
-const mock_api = abi.DriverApi{
-    .magic = abi.driver_magic,
-    .version = abi.driver_api_version,
-    .size = @sizeOf(abi.DriverApi),
+const mock_api = @import("r4os").r4dev.DriverApi2{
+    .magic = @import("r4os").technical2.abi.driver_magic,
+    .version = @import("r4os").technical2.abi.driver_version,
+    .size = @sizeOf(@import("r4os").r4dev.DriverApi2),
     .reserved = 0,
     .log_info = mockLogInfo,
     .log_warn = mockLogWarn,
@@ -909,10 +914,8 @@ const mock_api = abi.DriverApi{
     .request_irq = mockRequestIrq,
     .release_irq = mockReleaseIrq,
     .get_option = mockGetOption,
-    .register_audio_backend = mockRegisterStub,
     .register_storage_backend = mockRegisterStub,
     .register_input_backend = mockRegisterStub,
-    .register_synth_engine = mockRegisterStub,
     .register_mixer_backend = mockRegisterStub,
     .register_net_backend = mockRegisterNetBackend,
     .alloc_dma_region = mockAllocDmaRegion,
@@ -933,7 +936,7 @@ const mock_api = abi.DriverApi{
     .port_inl = mockPortInl,
     .port_outl = mockPortOutl,
     .net_receive_frame = mockNetReceiveFrame,
-    .register_audio_output_backend = mockRegisterStub,
+    .register_audio_output_backend = mockRegisterAudio2,
     .unregister_audio_backend = mockUnregisterStub,
     .tick_count = mockTickCount,
     .timer_frequency = mockTimerFrequency,
@@ -1342,5 +1345,27 @@ test "busy IRQ retirement vetoes backend teardown and retains route MSI and DMA 
     try std.testing.expectEqual(@as(i32, 0), backend.shutdown.?(backend.context));
     try std.testing.expectEqual(@as(u32, 2), model.irq_unregister_calls);
     try std.testing.expectEqual(@as(u32, 1), model.msi_disable_calls);
+    try std.testing.expectEqual(@as(u32, 1), model.free_dma_calls);
+}
+
+test "frozen clock cannot turn software-owner quiesce into an infinite wait or release DMA" {
+    try std.testing.expectEqual(@as(i32, 0), bindDriver(.{}));
+    const backend = model.backend.?;
+    const before = model.sim_ticks;
+    freeze_clock = true;
+    frozen_waits = 0;
+    driver.testingHoldPoll(true);
+    defer {
+        freeze_clock = false;
+        driver.testingHoldPoll(false);
+    }
+    try std.testing.expectEqual(@as(i32, -1), backend.shutdown.?(backend.context));
+    try std.testing.expectEqual(before, model.sim_ticks);
+    try std.testing.expect(frozen_waits > 0 and frozen_waits <= 4096);
+    try std.testing.expectEqual(@as(u32, 0), model.free_dma_calls);
+    try std.testing.expect(logContains("shutdown software-idle timeout"));
+    driver.testingHoldPoll(false);
+    freeze_clock = false;
+    try std.testing.expectEqual(@as(i32, 0), backend.shutdown.?(backend.context));
     try std.testing.expectEqual(@as(u32, 1), model.free_dma_calls);
 }
