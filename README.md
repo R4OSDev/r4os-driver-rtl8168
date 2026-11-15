@@ -4,7 +4,7 @@
 
 ## Package
 
-- Version: `0.1.6`
+- Version: `0.1.7`
 - Image target: `/R4OS/DRIVERS/RTL8168.R4D`
 - Image scope: `slim`
 - Canonical project manifest: `module.R4MF`
@@ -16,6 +16,12 @@ RX interrupts acknowledge and classify causes only. DriverApi2 wakes the
 common `net-rx` task for RX or controller-recovery work; TX and link-only
 causes do not enter the protocol path. The task retains a CPU-owned descriptor
 when Netcore's bounded copying queue reports backpressure.
+
+MSI, shared INTx and recovery rearming exclude `TX_OK` from the enabled
+mask, preserving the calibrated family-specific error sources. Full status
+acknowledgement, descriptor-based TX reclaim and the poll watchdog retain
+their existing behavior. The host model checks the actual mask after both
+bind modes and a TX-stall recovery; this does not qualify physical hardware.
 
 ## Build
 

@@ -1065,6 +1065,9 @@ test "bind prefers MSI and registers exactly the granted route" {
     try std.testing.expectEqual(@as(usize, 1), model.irq_route_count);
     try std.testing.expectEqual(@as(u8, 28), model.irq_routes[0]);
     try std.testing.expect(logContains("RTL8168.R4D MSI registered"));
+    // G-family RX, link and TX error sources remain enabled; TX_OK is
+    // acknowledged when seen but cannot raise its own completion interrupt.
+    try std.testing.expectEqual(@as(u16, 0x002B), rawRead(REG_INTERRUPT_MASK, u16));
 
     // Recovery-Telemetrie: keine Vollresets im normalen Betrieb.
     try std.testing.expect(!logContains("RTL8168.R4D recovery cause="));
@@ -1078,6 +1081,7 @@ test "bind falls back to shared INTx when MSI is unavailable" {
     try std.testing.expectEqual(@as(usize, 9), model.irq_route_count);
     try std.testing.expectEqual(@as(u8, 10), model.irq_routes[0]);
     try std.testing.expectEqual(@as(u8, 16), model.irq_routes[1]);
+    try std.testing.expectEqual(@as(u16, 0x002B), rawRead(REG_INTERRUPT_MASK, u16));
 
     try std.testing.expect(deliverFrame(&test_frame));
     pollBackend();
@@ -1124,6 +1128,7 @@ test "tx stall recovery is bounded and reports cause telemetry" {
     pollBackend();
     try std.testing.expect(logContains("RTL8168.R4D recovery cause=tx-stall stall=1"));
     try std.testing.expect(model.reset_count > 0);
+    try std.testing.expectEqual(@as(u16, 0x002B), rawRead(REG_INTERRUPT_MASK, u16));
     try std.testing.expect(!logContains("bisect"));
     const chip = rawRead(REG_CHIP_COMMAND, u8);
     try std.testing.expectEqual(

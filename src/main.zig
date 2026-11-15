@@ -107,6 +107,13 @@ fn interruptEventMask() u16 {
         INTERRUPT_ACTIVE;
 }
 
+fn interruptEnableMask() u16 {
+    // Descriptor ownership and the poll watchdog reclaim TX and detect
+    // stalls. Successful completion does not need an interrupt. Retain the
+    // calibrated family-specific error mask and full status acknowledgement.
+    return interruptEventMask() & ~INTERRUPT_TX_OK;
+}
+
 const RX_CONFIG_FIFO_UNLIMITED: u32 = 7 << 13;
 const RX_CONFIG_DMA_UNLIMITED: u32 = 7 << 8;
 const RX_CONFIG_ACCEPT_BROADCAST: u32 = 1 << 3;
@@ -916,7 +923,7 @@ fn recoverTxStall(s: *State) bool {
         s.active = false;
         return false;
     }
-    if (s.irq_registered) mmioWrite16(REG_INTERRUPT_MASK, interruptEventMask());
+    if (s.irq_registered) mmioWrite16(REG_INTERRUPT_MASK, interruptEnableMask());
     if (cause_syserr) {
         s.syserr_recoveries +%= 1;
     } else {
@@ -1039,7 +1046,7 @@ fn setupInterrupts(ctx: *const r4os.r4dev.DriverContext2) bool {
                     state.irq_route_count = 1;
                     state.irq_registered = true;
                     mmioWrite16(REG_INTERRUPT_STATUS, 0xFFFF);
-                    mmioWrite16(REG_INTERRUPT_MASK, interruptEventMask());
+                    mmioWrite16(REG_INTERRUPT_MASK, interruptEnableMask());
                     ctx.logInfo("RTL8168.R4D MSI registered");
                     return true;
                 }
@@ -1063,7 +1070,7 @@ fn setupInterrupts(ctx: *const r4os.r4dev.DriverContext2) bool {
     state.irq_registered = true;
     state.irq_mode = 1;
     mmioWrite16(REG_INTERRUPT_STATUS, 0xFFFF);
-    mmioWrite16(REG_INTERRUPT_MASK, interruptEventMask());
+    mmioWrite16(REG_INTERRUPT_MASK, interruptEnableMask());
     ctx.logInfo("RTL8168.R4D shared INTx registered");
     return true;
 }
